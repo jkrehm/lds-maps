@@ -208,37 +208,40 @@
 
 
     // Map Region
-    function Region (lat, lng) {
+    function Region (map, latLng, eventManager) {
 
-        this.currentType = 'ne';
+        var self = this;
+        var offset = 0.02;
+        var ne = new google.maps.LatLng(latLng.lat() + offset, latLng.lng() + offset);
+        var sw = new google.maps.LatLng(latLng.lat() - offset, latLng.lng() - offset);
 
-        this.ne = null;
-        this.sw = null;
+        this.map = map;
+        this.eventManager = eventManager;
+        this.bounds = new google.maps.LatLngBounds(sw, ne);
 
-        var mapOptions = {
-            center: new google.maps.LatLng(lat, lng),
-            zoom: 13,
-        };
+        var boundaries = new google.maps.Rectangle({
+            bounds    : this.bounds,
+            draggable : true,
+            editable  : true,
+            map       : this.map,
+        });
 
-        this.map = new google.maps.Map(document.getElementById('map-canvas'), mapOptions);
+        // Trigger change
+        this.eventManager.trigger('change:region', this);
+
+        // Handle boundary changes
+        function boundsChanged () {
+            self.bounds = this.getBounds();
+            self.eventManager.trigger('change:region', self);
+        }
+
+        google.maps.event.addListener(boundaries, 'bounds_changed', _.throttle(boundsChanged, 100));
     }
 
     Region.prototype = {
 
         getRegion : function () {
-            return new google.maps.LatLngBounds(this.sw, this.ne);
-        },
-
-        set : function (property, value) {
-
-            this[property] = value;
-
-            // If updating the boundaries, trigger event
-            if (['ne', 'sw'].indexOf(property) > -1) {
-                eventManager.trigger('change:region', this);
-            }
-
-            return this;
+            return this.bounds;
         },
     };
 
@@ -291,16 +294,26 @@
     // Scripts and styles
     function loadScripts () {
 
+        var isMapsLoaded = $.Deferred();
+
+        // If Google Maps hasn't loaded, load now and what it's finished, resolve the Deferred
         if (typeof google === 'undefined' || typeof google.maps === 'undefined') {
-            $.getScript('//maps.googleapis.com/maps/api/js?sensor=false&callback=initialize');
+            $.getScript('//maps.googleapis.com/maps/api/js?sensor=false&callback=mapsLoaded');
+
+            global.mapsLoaded = function () {
+                isMapsLoaded.resolve();
+            };
+
         } else {
             $('#map-members').empty();
-            initializeMap();
+            isMapsLoaded.resolve();
         }
 
+        // When dependencies have loaded, kick things off
         $.when(
+            isMapsLoaded,
             $.getScript('//cdnjs.cloudflare.com/ajax/libs/lodash.js/2.4.1/lodash.min.js')
-        ).done(getMembership);
+        ).done(initialize);
     }
 
     function addStyles () {
@@ -388,77 +401,71 @@
 
     // Load 3rd party scripts and apply styles
     loadScripts();
-    addStyles();
 
 
 
 
     /*** MAIN APPLICATION ***/
-    var $mapMembers = $('<div/>', {id : '#map-members'}).prependTo('body');
-    var eventManager = new EventManager();
 
-    function initializeMap () {
+    function initialize () {
 
-        var region;
+        var $mapMembers = $('<div/>', {id : '#map-members'}).prependTo('body');
+        var eventManager = new EventManager();
+
+        addStyles();
+        initializeMap($mapMembers, eventManager);
+        getMembership($mapMembers, eventManager);
+
+        // When ward changes, re-initialize the map
+        eventManager.on('change:ward', function () {
+            initializeMap($mapMembers, eventManager);
+        });
+    }
+
+    function initializeMap ($mapMembers, eventManager) {
 
         function makeMap (location) {
 
-            region = new Region(location.coords.latitude, location.coords.longitude);
+            var map = new google.maps.Map(document.getElementById('map-canvas'), {
+                center  : new google.maps.LatLng(location.coords.latitude, location.coords.longitude),
+                zoom    : 13,
+            });
+
+            map.regions = [];
 
             // Show helper dialog
-            var dialog = new Dialog('Click to set the north-east corner of the area').show();
+            var dialog = new Dialog('Use your mouse place the ward boundaries').show($mapCanvas);
 
-            // Get north-east and south-west corners of the area
-            var setCoordinates = google.maps.event.addListener(region.map, 'click', $.proxy(function (e) {
+            var clickListener = google.maps.event.addListener(map, 'click', function (e) {
+                dialog.close();
+                map.regions.push(new Region(map, e.latLng, eventManager));
 
-                function makeBoundaries () {
+                google.maps.event.removeListener(clickListener); //@todo Union multiple regions
+            });
 
-                    var self = this;
-
-                    var boundaries = new google.maps.Rectangle({
-                        bounds    : region.getRegion(),
-                        draggable : true,
-                        editable  : true,
-                        map       : region.map,
-                    });
-
-                    function boundsChanged () {
-
-                        var newBoundaries = region.map.getBounds();
-
-                        region.set('ne', newBoundaries.getNorthEast());
-                        region.set('sw', newBoundaries.getSouthWest());
-                    }
-
-                    google.maps.event.addListener(boundaries, 'bounds_changed', _.debounce(boundsChanged, 100));
+            // When the ward changes, remove all regions
+            eventManager.on('change:ward', function () {
+                while (map.regions.length > 0) {
+                    map.regions.pop();
                 }
-
-                // Set/switch type
-                var type = region.ne ? 'sw' : 'ne';
-
-                region.set(type, new google.maps.LatLng(e.latLng.lat(), e.latLng.lng()));
-
-                if (type === 'ne') {
-                    dialog.hide().setText('Click to set the south-west corner of the area').show();
-                } else {
-                    dialog.close();
-                    google.maps.event.removeListener(setCoordinates);
-                    makeBoundaries.call(this);
-                }
-
-            }, this));
+            });
         }
 
-        $('<div/>', {id : 'map-canvas'}).appendTo($mapMembers);
+        var $mapCanvas = $('<div/>', {id : 'map-canvas'}).appendTo($mapMembers);
 
         if ('geolocation' in navigator) {
             navigator.geolocation.getCurrentPosition(makeMap);
         } else {
             alert('Your browser doesn\'t support geolocation');
         }
+
+        // When ward changes, clear the map
+        eventManager.on('change:ward', function () {
+            $mapCanvas.remove();
+        });
     }
 
-    function getMembership () {
+    function getMembership ($mapMembers, eventManager) {
 
         function getWard () {
             $.getJSON(Utilities.buildURL('ward-info'))
@@ -491,16 +498,15 @@
 
             $memberFilters.append(wardsView.render().el);
 
+            // Selected ward changed
             wardsView.$el.on('change', function (e) {
 
                 var ward = $(e.target).val();
 
-                getMembers({wardUnitNo : ward});
+                // Trigger any event listeners
+                eventManager.trigger('change:ward', ward);
 
-                $('#map-canvas').fadeOut(function () {
-                    $(this).remove();
-                    initializeMap();
-                });
+                getMembers({wardUnitNo : ward});
             });
         }
 
@@ -535,6 +541,7 @@
                         'background-image' : '',
                         'color'            : '',
                     });
+
                 }, 1000))
                 .on('queue:stopped', _.debounce(function () {
                     return showMembers(members);
@@ -542,7 +549,6 @@
 
 
             // Get members' names and addresses
-            // var temp = response; response = []; for (var i = 0; i<15; i++) response.push(temp[i]);//@debug
             response.forEach(function (hh) {
 
                 var id = hh.headOfHouseIndividualId;
@@ -624,25 +630,25 @@
                 });
             });
 
-            // @todo Fix the yuckiness of this variable reference
-            genderFilter.$el.on('change', function (e) {
-                return filterGender.call(this, members, e);
+            // Filter on gender change
+            eventManager.on('change:gender', function (gender) {
+                filterGender(members, gender.value);
             });
         }
 
-        function filterGender (members) {
+        function filterGender (members, selected) {
 
             members.forEach(function (member) {
 
                 if (member.inRegion === false) {
                     return;
-                } else if (this.value === 'BOTH') {
+                } else if (selected === 'BOTH') {
                     member.$html.show();
                 } else {
-                    member.$html.toggle((member.gender === this.value));
+                    member.$html.toggle((member.gender === selected));
                 }
 
-            }, this);
+            });
         }
 
 
@@ -677,12 +683,18 @@
 
         $memberFilters.append(genderFilter.render().el);
 
+        // Trigger events on gender selection
+        genderFilter.$el.on('change', function (e) {
+            eventManager.trigger('change:gender', e.target);
+        });
+
+        // When ward changes, reset the filter
+        eventManager.on('change:ward', function () {
+            genderFilter.$el.val('BOTH');
+        });
+
         // Get things started
         getWard();
     }
-
-
-    // Expose globals
-    global.initialize = initializeMap;
 
 })(jQuery, window);
