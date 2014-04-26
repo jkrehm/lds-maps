@@ -68,8 +68,9 @@
             var deferred = $.Deferred();
 
             this.requests.push({
-                request : request,
+                request  : request,
                 deferred : deferred,
+                status   : 'pending',
             });
 
             if (!this.isRunning()) {
@@ -84,7 +85,7 @@
             var self = this;
 
             // Only start the queue if it's not actively running
-            if (['stopped', 'clear'].indexOf(this.status) === -1) {
+            if (this.isRunning()) {
                 return;
             }
 
@@ -98,10 +99,12 @@
 
                 return function (response) {
 
+                    // If this is the last request, stop queue
                     if (self.isQueueClear()) {
                         self.stopQueue();
                     }
 
+                    r.status = 'done';
                     r.deferred.resolve(response);
                 };
             }
@@ -109,11 +112,9 @@
             // Process requests - up to the throttle limit - checking for more every 1/2 second
             this.timer = setInterval(function () {
 
-                // If queue is clear, stop processing
-                if (self.requests.length === 0) {
-                    // self.queueIsClear.call(self);
-
-                    return;
+                // If queue is not stopped by last request's return, stop here
+                if (self.isQueueClear()) {
+                    self.stopQueue();
                 }
 
                 // Send requests
@@ -123,35 +124,14 @@
                     ), self.throttle),
                 function (r) {
                     $.ajax(r.request).done(resolveRequest.call(self, r));
-                    r.status = 'pending';
+                    r.status = 'running';
                 });
-/*
-                for (var i = 0; i < self.throttle; i++) {
 
-                    var r = self.requests.shift();
-
-                    if (typeof r !== 'undefined') {
-                        $.ajax(r.request).done(resolveRequest.call(self, r));
-                    }
-                }
-*/
             }, 500);
 
             return this;
         },
-/*
-        queueIsClear : function () {
 
-            if (!this.isRunning()) {
-                return this;
-            }
-
-            this.status = 'clear';
-            this.trigger('queue:clear');
-
-            return this;
-        },
-*/
         stopQueue : function () {
 
             var self = this;
@@ -160,29 +140,22 @@
                 return this;
             }
 
-            // Wait another second before stopping
-            setTimeout(function () {
+            clearInterval(self.timer);
 
-                if (self.isQueueClear() && self.isRunning()) {
-
-                    clearInterval(self.timer);
-
-                    self.status = 'stopped';
-                    self.trigger('queue:stopped');
-                }
-
-            }, 1000);
+            self.status = 'stopped';
+            self.trigger('queue:stopped');
 
             return this;
         },
 
         isRunning : function () {
-            return (this.status !== 'stopped');
+            return (this.status === 'running');
         },
 
         isQueueClear : function () {
-            return (this.requests.length === 0);
-            // return (this.status === 'clear' && this.requests.length === 0);
+            return (_.filter(this.requests, function (r) {
+                return ['pending', 'running'].indexOf(r.status) > -1;
+            }).length === 0);
         }
     });
 
@@ -248,49 +221,6 @@
         };
 
         this.map = new google.maps.Map(document.getElementById('map-canvas'), mapOptions);
-
-        // Show helper dialog
-        var dialog = new Dialog('Click to set the north-east corner of the area').show();
-
-        // Get north-east and south-west corners of the area
-        var setCoordinates = google.maps.event.addListener(this.map, 'click', $.proxy(function (e) {
-
-            function makeBoundaries () {
-
-                var self = this;
-
-                var boundaries = new google.maps.Rectangle({
-                    bounds    : this.getRegion(),
-                    draggable : true,
-                    editable  : true,
-                    map       : this.map,
-                });
-
-                function boundsChanged () {
-
-                    var newBoundaries = this.getBounds();
-
-                    self.set('ne', newBoundaries.getNorthEast());
-                    self.set('sw', newBoundaries.getSouthWest());
-                }
-
-                google.maps.event.addListener(boundaries, 'bounds_changed', _.debounce(boundsChanged, 100));
-            }
-
-            // Set/switch type
-            var type = this.ne ? 'sw' : 'ne';
-
-            this.set(type, new google.maps.LatLng(e.latLng.lat(), e.latLng.lng()));
-
-            if (type === 'ne') {
-                dialog.hide().setText('Click to set the south-west corner of the area').show();
-            } else {
-                dialog.close();
-                google.maps.event.removeListener(setCoordinates);
-                makeBoundaries.call(this);
-            }
-
-        }, this));
     }
 
     Region.prototype = {
@@ -331,11 +261,12 @@
     function SelectView (options) {
 
         options = _.extend({}, {
-            data  : [],
-            value : '',
+            data     : [],
+            selected : '',
         }, options);
 
         this.data = options.data;
+        this.selected = options.selected;
 
         View.prototype.constructor.apply(this, arguments);
     }
@@ -471,7 +402,51 @@
         var region;
 
         function makeMap (location) {
+
             region = new Region(location.coords.latitude, location.coords.longitude);
+
+            // Show helper dialog
+            var dialog = new Dialog('Click to set the north-east corner of the area').show();
+
+            // Get north-east and south-west corners of the area
+            var setCoordinates = google.maps.event.addListener(region.map, 'click', $.proxy(function (e) {
+
+                function makeBoundaries () {
+
+                    var self = this;
+
+                    var boundaries = new google.maps.Rectangle({
+                        bounds    : region.getRegion(),
+                        draggable : true,
+                        editable  : true,
+                        map       : region.map,
+                    });
+
+                    function boundsChanged () {
+
+                        var newBoundaries = region.map.getBounds();
+
+                        region.set('ne', newBoundaries.getNorthEast());
+                        region.set('sw', newBoundaries.getSouthWest());
+                    }
+
+                    google.maps.event.addListener(boundaries, 'bounds_changed', _.debounce(boundsChanged, 100));
+                }
+
+                // Set/switch type
+                var type = region.ne ? 'sw' : 'ne';
+
+                region.set(type, new google.maps.LatLng(e.latLng.lat(), e.latLng.lng()));
+
+                if (type === 'ne') {
+                    dialog.hide().setText('Click to set the south-west corner of the area').show();
+                } else {
+                    dialog.close();
+                    google.maps.event.removeListener(setCoordinates);
+                    makeBoundaries.call(this);
+                }
+
+            }, this));
         }
 
         $('<div/>', {id : 'map-canvas'}).appendTo($mapMembers);
@@ -521,6 +496,11 @@
                 var ward = $(e.target).val();
 
                 getMembers({wardUnitNo : ward});
+
+                $('#map-canvas').fadeOut(function () {
+                    $(this).remove();
+                    initializeMap();
+                });
             });
         }
 
@@ -631,7 +611,7 @@
                 // Add event handler for region changing
                 eventManager.on('change:region', function (region) {
 
-                    var genderSelected = $('input[name="member-gender"]:checked').val();
+                    var genderSelected = genderFilter.$el.val();
                     var latLng = new google.maps.LatLng(member.lat, member.lng);
 
                     member.inRegion = region.getRegion().contains(latLng);
