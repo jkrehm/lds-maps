@@ -1,9 +1,55 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Bookmarker</title>
+    <meta charset="utf-8">
+    <title>LDS Utilities</title>
+    <link rel="stylesheet" type="text/css" href="css/main.css">
 </head>
 <body>
-    <a href="javascript:(function(){var s=document.createElement('script');s.src='//localhost:9999/mapSplit.js';document.body.appendChild(s);})();">Bookmark</a>
+    <h1>Utilities</h1>
+
+    <table>
+        <tr>
+            <th>Name</th>
+            <th>Description</th>
+        </tr>
+        <tr>
+            <td>
+                <a href="javascript:(function(){var s=document.createElement('script');s.src='//s3.amazonaws.com/lds.rehm.me/utilities/map-members.js';document.body.appendChild(s);})();">Map Members</a>
+            </td>
+            <td>
+                <p>
+                    Retrieve members of a ward who live in a defined geographical region. You must be logged into <a href="https://www.lds.org/">LDS.org</a> for the bookmarklet to function.
+                </p>
+
+                <p>
+                    Note: The Map Members bookmarklet loads three scripts from 3rd party sources, specifically: the current site, <a href="http://cdnjs.org/">cdnjs.org</a>, and <a href="https://developers.google.com/maps/documentation/javascript/tutorial">Google Maps</a>.
+                </p>
+            </td>
+        </tr>
+    </table>
+
+    <p>
+
+    </p>
+
+
+
+    <p><a href="https://support.mozilla.org/en-US/kb/bookmarklets-perform-common-web-page-tasks">Learn about bookmarklets</a></p>
+
+    <p>To install a bookmarklet:</p>
+
+    <div style="text-align: center">
+        <img src="images/save-bookmarklet.gif" alt="Save bookmarklet">
+
+        <p>OR</p>
+    </div>
+
+    <ol>
+        <li>Right-click on the bookmarklet above and choose "Copy Link Address" (or similar)</li>
+        <li>Bookmark this page</li>
+        <li>Edit the book mark you just created and in the "URL" box (or similar) paste the link you copied</li>
+        <li>Log into <a href="https://www.lds.org/">LDS.org</a> and run the bookmark you edited</li>
+    </ol>
 </body>
 </html>
