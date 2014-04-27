@@ -35,6 +35,19 @@
             return this;
         },
 
+        off : function (e) {
+
+            if (typeof this.events[e] === 'undefined') {
+                return this;
+            }
+
+            while (this.events[e].length > 0) {
+                this.events[e].pop();
+            }
+
+            return this;
+        },
+
         trigger : function () {
 
             var args = Array.prototype.slice.call(arguments);
@@ -372,7 +385,8 @@
             '}',
 
             '#members-list > div {',
-            'margin: 5px;',
+            'cursor: pointer;',
+            'padding: 2px;',
             '}',
 
             '.map-dialog {',
@@ -448,6 +462,20 @@
                 while (map.regions.length > 0) {
                     map.regions.pop();
                 }
+            });
+
+            // Display/hide member's location
+            var memberMarker;
+            eventManager.on('hover:in:member', function (member) {
+                memberMarker = new google.maps.Marker({
+                    clickable : false,
+                    map       : map,
+                    position  : new google.maps.LatLng(member.lat, member.lng),
+                    title     : member.preferredName,
+                });
+            });
+            eventManager.on('hover:out:member', function () {
+                memberMarker.setMap(null);
             });
         }
 
@@ -610,7 +638,14 @@
             members.forEach(function (member) {
 
                 // Display member name
-                member.$html = $('<div/>').text(member.preferredName);
+                member.$html = $('<div/>')
+                    .text(member.preferredName)
+                    .on('mouseenter', function () {
+                        eventManager.trigger('hover:in:member', member);
+                    })
+                    .on('mouseleave', function () {
+                        eventManager.trigger('hover:out:member', member);
+                    });
 
                 $members.append(member.$html);
 
