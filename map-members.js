@@ -21,28 +21,88 @@
 
     // Event manager
     function EventManager () {
-        this.events = [];
+        this._events = {};
+        this._listeningTo = {};
     }
 
     EventManager.prototype = {
 
-        on : function (e, callback) {
+        on : function (e, callback, context) {
 
-            this.events[e] = this.events[e] || [];
+            if (typeof this._events === 'undefined') {
+                this._events = {};
+            }
 
-            this.events[e].push(callback);
+            this._events[e] = this._events[e] || [];
+
+            this._events[e].push({
+                callback : callback,
+                context  : context || this,
+            });
 
             return this;
         },
 
-        off : function (e) {
+        off : function (e, context) {
 
-            if (typeof this.events[e] === 'undefined') {
+            if (e && typeof this._events[e] === 'undefined') {
                 return this;
             }
 
-            while (this.events[e].length > 0) {
-                this.events[e].pop();
+            if (typeof this._events === 'undefined') {
+                this._events = {};
+            }
+
+            context = context || this;
+
+            var i;
+            if (!e) {
+
+                for (e in this._events) {
+                    for (i = this._events[e].length - 1; i >= 0; i--) {
+                        if (context === this._events[e][i].context) {
+                            this._events[e].pop();
+                        }
+                    }
+                }
+
+            } else {
+
+                for (i = this._events[e].length - 1; i >= 0; i--) {
+                    if (context === this._events[e][i].context) {
+                        this._events[e].pop();
+                    }
+                }
+            }
+
+            return this;
+        },
+
+        listenTo : function (obj, e, callback) {
+
+            if (typeof this._listeningTo === 'undefined') {
+                this._listeningTo = {};
+            }
+
+            var id = obj._listenId || (obj._listenId = _.uniqueId('l'));
+            this._listeningTo[id] = obj;
+            obj.on(e, callback, this);
+
+            return this;
+        },
+
+        stopListening: function(o, e) {
+
+            if (!this._listeningTo) {
+                return this;
+            }
+
+            for (var id in this._listeningTo) {
+                var obj = this._listeningTo[id];
+
+                if (!o || o === obj) {
+                    obj.off(e, this);
+                }
             }
 
             return this;
@@ -50,14 +110,18 @@
 
         trigger : function () {
 
+            if (typeof this._events === 'undefined') {
+                this._events = {};
+            }
+
             var args = Array.prototype.slice.call(arguments);
             var e = args.splice(0, 1)[0]; // First parameter will be the event name
-            var events = this.events[e];
+            var events = this._events[e];
 
             if (events instanceof Array) {
-                events.forEach(function (callback) {
-                    callback.apply(this, args);
-                }, this);
+                events.forEach(function (ev) {
+                    ev.callback.apply(ev.context, args);
+                });
             }
 
             return this;
@@ -68,7 +132,7 @@
     // Request manager (extends EventManager)
     function RequestManager (throttle) {
         this.requests = [];
-        this.events = [];
+        this._events = {};
         this.status = 'stopped';
         this.timer = 0;
         this.throttle = throttle || 20;
@@ -221,7 +285,7 @@
 
 
     // Map Region
-    function Region (map, latLng, eventManager) {
+    function Region (map, latLng) {
 
         var self = this;
         var offset = 0.02;
@@ -229,7 +293,6 @@
         var sw = new google.maps.LatLng(latLng.lat() - offset, latLng.lng() - offset);
 
         this.map = map;
-        this.eventManager = eventManager;
         this.bounds = new google.maps.LatLngBounds(sw, ne);
 
         var boundaries = new google.maps.Rectangle({
@@ -240,23 +303,23 @@
         });
 
         // Trigger change
-        this.eventManager.trigger('change:region', this);
+        this.trigger('change:region', this);
 
         // Handle boundary changes
         function boundsChanged () {
             self.bounds = this.getBounds();
-            self.eventManager.trigger('change:region', self);
+            self.trigger('change:region', self);
         }
 
-        google.maps.event.addListener(boundaries, 'bounds_changed', _.throttle(boundsChanged, 100));
+        google.maps.event.addListener(boundaries, 'bounds_changed', _.throttle(boundsChanged, 200));
     }
 
-    Region.prototype = {
+    $.extend(Region.prototype, EventManager.prototype, {
 
         getRegion : function () {
             return this.bounds;
         },
-    };
+    });
 
 
     // Views
@@ -423,22 +486,66 @@
 
     function initialize () {
 
-        var $mapMembers = $('<div/>', {id : '#map-members'}).prependTo('body');
-        var eventManager = new EventManager();
-
         addStyles();
-        initializeMap($mapMembers, eventManager);
-        getMembership($mapMembers, eventManager);
+
+        var $mapMembers = $('<div/>', {id : '#map-members'}).prependTo('body');
+
+        var memberMap = new Map({parent : $mapMembers});
+        var membership = new Membership({parent : $mapMembers});
+
+        memberMap.listenTo(membership, 'hover:in:member', function (member) {
+            memberMap.trigger('create:marker', member);
+        });
+
+        memberMap.listenTo(membership, 'hover:out:member', function () {
+            memberMap.trigger('destroy:marker');
+        });
 
         // When ward changes, re-initialize the map
-        eventManager.on('change:ward', function () {
-            initializeMap($mapMembers, eventManager);
+        memberMap.listenTo(membership, 'change:ward', function () {
+            memberMap
+                .trigger('empty')
+                .initialize();
+        });
+
+        membership.listenTo(memberMap, 'change:region', function (region) {
+            membership.trigger('filter:region', region);
         });
     }
 
-    function initializeMap ($mapMembers, eventManager) {
+    function Map (options) {
 
-        function makeMap (location) {
+        if (!(this instanceof Map)) {
+            return new Map(arguments);
+        }
+
+        this.$parent = options.parent;
+        this.$canvas = null;
+
+        this.initialize();
+    }
+
+    $.extend(Map.prototype, EventManager.prototype, {
+
+        initialize : function () {
+
+            if ('geolocation' in navigator) {
+                navigator.geolocation.getCurrentPosition(_.bind(this.show, this));
+            } else {
+                alert('Your browser doesn\'t support geolocation');
+            }
+
+            // When ward changes, clear the map
+            this.on('empty', function () {
+                this.$canvas.remove();
+            });
+
+            return this;
+        },
+
+        show : function (location) {
+
+            this.$canvas = $('<div/>', {id : 'map-canvas'}).appendTo(this.$parent);
 
             var map = new google.maps.Map(document.getElementById('map-canvas'), {
                 center  : new google.maps.LatLng(location.coords.latitude, location.coords.longitude),
@@ -448,52 +555,61 @@
             map.regions = [];
 
             // Show helper dialog
-            var dialog = new Dialog('Use your mouse place the ward boundaries').show($mapCanvas);
+            var dialog = new Dialog('Use your mouse place the ward boundaries').show(this.$canvas);
 
-            var clickListener = google.maps.event.addListener(map, 'click', function (e) {
+            var clickListener = google.maps.event.addListener(map, 'click', _.bind(function (e) {
+
                 dialog.close();
-                map.regions.push(new Region(map, e.latLng, eventManager));
+
+                var region = new Region(map, e.latLng)
+                    .on('change:region', function (region) {
+                        this.trigger('change:region', region);
+                    }, this);
+
+                map.regions.push(region);
 
                 google.maps.event.removeListener(clickListener); //@todo Union multiple regions
-            });
 
-            // When the ward changes, remove all regions
-            eventManager.on('change:ward', function () {
-                while (map.regions.length > 0) {
-                    map.regions.pop();
-                }
-            });
+            }, this));
+
+            var memberMarker;
 
             // Display/hide member's location
-            var memberMarker;
-            eventManager.on('hover:in:member', function (member) {
-                memberMarker = new google.maps.Marker({
-                    clickable : false,
-                    map       : map,
-                    position  : new google.maps.LatLng(member.lat, member.lng),
-                    title     : member.preferredName,
+            this
+                .on('create:marker', function (member) {
+                    memberMarker = new google.maps.Marker({
+                        clickable : false,
+                        map       : map,
+                        position  : new google.maps.LatLng(member.lat, member.lng),
+                        title     : member.preferredName,
+                    });
+                })
+                .on('destroy:marker', function () {
+                    memberMarker.setMap(null);
                 });
-            });
-            eventManager.on('hover:out:member', function () {
-                memberMarker.setMap(null);
-            });
+
+            return this;
+        },
+
+        empty : function () {
+
+            this.trigger('empty');
+            this.off();
+            this.stopListening();
+
+            return this;
+        },
+    });
+
+    function Membership (options) {
+
+        if (!(this instanceof Membership)) {
+            return new Membership(arguments);
         }
 
-        var $mapCanvas = $('<div/>', {id : 'map-canvas'}).appendTo($mapMembers);
+        var self = this;
 
-        if ('geolocation' in navigator) {
-            navigator.geolocation.getCurrentPosition(makeMap);
-        } else {
-            alert('Your browser doesn\'t support geolocation');
-        }
-
-        // When ward changes, clear the map
-        eventManager.on('change:ward', function () {
-            $mapCanvas.remove();
-        });
-    }
-
-    function getMembership ($mapMembers, eventManager) {
+        this.$parent = options.parent;
 
         function getWard () {
             $.getJSON(Utilities.buildURL('ward-info'))
@@ -532,7 +648,7 @@
                 var ward = $(e.target).val();
 
                 // Trigger any event listeners
-                eventManager.trigger('change:ward', ward);
+                self.trigger('change:ward', ward);
 
                 getMembers({wardUnitNo : ward});
             });
@@ -641,16 +757,16 @@
                 member.$html = $('<div/>')
                     .text(member.preferredName)
                     .on('mouseenter', function () {
-                        eventManager.trigger('hover:in:member', member);
+                        self.trigger('hover:in:member', member);
                     })
                     .on('mouseleave', function () {
-                        eventManager.trigger('hover:out:member', member);
+                        self.trigger('hover:out:member', member);
                     });
 
                 $members.append(member.$html);
 
                 // Add event handler for region changing
-                eventManager.on('change:region', function (region) {
+                self.on('filter:region', function (region) {
 
                     var genderSelected = genderFilter.$el.val();
                     var latLng = new google.maps.LatLng(member.lat, member.lng);
@@ -666,7 +782,7 @@
             });
 
             // Filter on gender change
-            eventManager.on('change:gender', function (gender) {
+            self.on('filter:gender', function (gender) {
                 filterGender(members, gender.value);
             });
         }
@@ -687,8 +803,8 @@
         }
 
 
-        var $members = $('<div/>', {id : 'members-list'}).appendTo($mapMembers);
-        var $memberFilters = $('<div/>', {id : 'member-filters'}).appendTo($mapMembers);
+        var $members = $('<div/>', {id : 'members-list'}).appendTo(this.$parent);
+        var $memberFilters = $('<div/>', {id : 'member-filters'}).appendTo(this.$parent);
 
         // Show gender filter
         var genderFilter = new SelectView({
@@ -720,16 +836,22 @@
 
         // Trigger events on gender selection
         genderFilter.$el.on('change', function (e) {
-            eventManager.trigger('change:gender', e.target);
+            self.trigger('filter:gender', e.target);
         });
 
-        // When ward changes, reset the filter
-        eventManager.on('change:ward', function () {
+        // When ward changes, reset the filter and clear events
+        self.on('change:ward', function () {
+
             genderFilter.$el.val('BOTH');
+
+            self.off('filter:gender');
+            self.off('filter:region');
         });
 
         // Get things started
         getWard();
     }
+
+    $.extend(Membership.prototype, EventManager.prototype);
 
 })(jQuery, window);
