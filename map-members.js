@@ -476,7 +476,7 @@
         document.head.appendChild(s);
     }
 
-    // Load 3rd party scripts and apply styles
+    // Load dependencies (will call initialize() when they've loaded)
     loadScripts();
 
 
