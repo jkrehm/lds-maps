@@ -555,7 +555,7 @@
             map.regions = [];
 
             // Show helper dialog
-            var dialog = new Dialog('Use your mouse place the ward boundaries').show(this.$canvas);
+            var dialog = new Dialog('Use your mouse to place the ward boundaries').show(this.$canvas);
 
             var clickListener = google.maps.event.addListener(map, 'click', _.bind(function (e) {
 
